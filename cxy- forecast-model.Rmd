@@ -1,0 +1,1092 @@
+---
+title: "forecast-Report-Du_NaiHe"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+#ForeCast report
+
+**Team：CaiXiaoYi DingAoDi DuNaiHe LiaoNing WangLin**
+
+
+## Research
+
+    The analysis of temporal data is an important issue in current research, because most real-world data either explicitly or implicitly contain some information about time.
+    In the current forecast data, there are three sheets, namely mass, food and drug.
+    
+    in the treatment of data.
+    
+    We have not predicted them together.because they have some differences in certain realistic factors.
+    
+    The context of this data is the United States, so I learned about the differences between American consumption habits and mass, food and drug.
+    
+    For example, FOOD sells better because in the US, people like to go to FOOD after work and school to buy fresh pies, cakes and other fast food. FMCG products need to be bought fresh and not stocked up on too much food.
+    
+
+    And mass, although the supermarket is the largest, it doesn't sell more than food, this is because mass is suitable for family level to go shopping, it may be a wholesale market, it may have a scale cost advantage compared to DRUG, so it sells in the mid range and people like weekends. The whole family drives to buy food for a week or so and fresh pie has a limited expiry date so it doesn't people like to drive to buy food for a week or so on the weekend and raw pie has a limited expiry date so they don't buy too much raw pie at a time. And DRUG, like the small supermarkets near home, has a single flavour of pie, so it has the lowest sales.
+
+
+    Therefore, we did not combine the data from these three size classes of supermarkets in this forecast.
+
+    But this forecast has certain limitations**, because the yearly data is particularly small and it has missing months, for example in 04 09 it only has half yearly data. Here, in the traditional model (time regression), we only forecast the annual total by monthly averages and then use these five totals to forecast the annual trend. This is because it is inherently difficult to predict three points from five points, as only the trend is predicted in the annual data.
+    
+    In terms of model use
+    
+    For this prediction task, our team, not only used the traditional models, stl, ETS,HW, time regression, but also some novel models, such as auto_arima_xgboost, randomForest,earth, prophet_xgboost, stlm_ets, stlm_ arima,prophet，And so on, a dozen models. some of them are traditional models combined with machine learning algorithms to good effect, and these are the models that people like to use in the kaggle competition.
+    
+    The report is exported in HTML format because this way plotly can be used and the results can be viewed interactively.
+
+    
+
+
+## code
+
+### Data pre-processing
+
+```{r setup, include=FALSE}
+library(openxlsx)
+library(fpp3)
+library(tidyverse)
+library(lubridate)
+library(tidyverse)
+library(prophet)
+library(zoo)
+library(quantmod)
+library(ggplot2)
+library(tidymodels)
+library(modeltime)
+library(tidyverse)
+library(lubridate)
+library(timetk)
+library(earth)
+library(forecast)
+library(tseries)
+```
+
+
+```{r}
+# author：Cai
+# rm(list = ls())
+get_data_by_no <- function(df, cnum){
+  first_cnum = 1 + cnum
+  second_cnum = 73 + cnum
+
+  res <- data.frame(df[1], df[first_cnum], df[second_cnum])
+  #test
+  
+  
+  res <- res[2:nrow(res),]
+  names(res) <- c("Month", "VOLUMN", "PRICE")
+  return (res)
+  
+}
+
+mass <- read.xlsx("/Users/wangzuxian/Data_for_test1.xlsx",sheet = 1)
+food <- read.xlsx("/Users/wangzuxian/Data_for_test1.xlsx",sheet = 2)
+drug <- read.xlsx("/Users/wangzuxian/Data_for_test1.xlsx",sheet = 3)
+
+cnum = 7
+mass <- get_data_by_no(mass, cnum)
+food <- get_data_by_no(food, cnum)
+drug <- get_data_by_no(drug, cnum)
+```
+
+
+
+```{r}
+all <- rbind(mass, food)
+
+mass
+food
+drug
+all
+
+```
+
+#### Aggregate data c.for volume (sum)
+
+```{r}
+#author :CaiVOL_CORN CHIPS
+mass$VOLUMN <- as.numeric(mass$VOLUMN)
+mass$PRICE <- as.numeric(mass$PRICE)
+food$VOLUMN <- as.numeric(food$VOLUMN)
+food$PRICE <- as.numeric(food$PRICE)
+drug$VOLUMN <- as.numeric(drug$VOLUMN)
+drug$PRICE <- as.numeric(drug$PRICE)
+all$VOLUMN <- as.numeric(all$VOLUMN)
+all$PRICE <- as.numeric(all$PRICE)
+mass$weight_sum = as.numeric(mass$VOLUMN) * as.numeric(mass$PRICE)
+food$weight_sum = as.numeric(food$VOLUMN)*as.numeric(food$PRICE)
+drug$weight_sum = as.numeric(drug$VOLUMN)*as.numeric(drug$PRICE)
+all$weight_sum = as.numeric(all$VOLUMN)*as.numeric(all$PRICE)
+```
+
+#### 1.Aggregate data at
+
+*a.quarter* *b.year* *d.for price (weighted mean)* *2.Calculate turnover (price x volume)*
+
+```{r}
+#author :Cai
+quarter_data = function(df){
+  Sys.setlocale('LC_TIME', 'C')
+  month <- df$Month
+  month <- str_c('1_',month)
+  month <- as.Date(month,format='%d_%Y_%b')
+  
+  quarter <- str_c(year(month),'-',quarters(month))
+  
+  df$quarter <- quarter
+  
+  # weight_sum is Turnover
+
+  
+  # data month
+  df_month <- data.frame(df$Month,df$VOLUMN,df$VOLUMN,df$weight_sum)
+  
+  # Quarterly data
+  vol_sum <- aggregate(df$VOLUMN, by=list(type=df$quarter),sum)
+  vol_sum
+  weight_sum <- aggregate(df$weight_sum, by=list(type=df$quarter),sum)
+  
+  df_quarter = data.frame(quarter=vol_sum$type,
+                          vol_sum=vol_sum$x,
+                          weight_sum=weight_sum$x)
+  df_quarter$weight_mean <- df_quarter$weight_sum/df_quarter$vol_sum
+  df_quarter
+  return (df_quarter)
+  
+}
+
+year_data = function(df){
+  year <- substring(df$Month, 1, 4)
+  
+  df$year <- year
+  
+  df_year <- df %>%
+    group_by(year)%>%
+    summarise(weight_sum = sum(weight_sum))
+  
+  vol_sumy <- aggregate(df$VOLUMN, by=list(type=df$year),sum)
+  vol_sumy
+  weight_sumy <- aggregate(df$weight_sum, by=list(type=df$year),sum)
+  
+  df_year = data.frame(year = vol_sumy$type,vol_sumy = vol_sumy$x,
+                       weight_sumy = weight_sumy$x)
+  df_year$weight_mean <- df_year$weight_sumy/df_year$vol_sumy
+  df_year
+  return (df_year)
+}
+
+```
+
+#### get the year and quarter data
+
+```{r}
+#author :Cai
+mass_quarter <- quarter_data(mass)
+food_quarter <- quarter_data(food)
+drug_quarter <- quarter_data(drug)
+all_quarter <- quarter_data(all)
+
+mass_quarter 
+food_quarter 
+drug_quarter 
+all_quarter 
+
+mass_year <- year_data(mass)
+food_year <- year_data(food)
+drug_year <- year_data(drug)
+all_year <- year_data(all)
+
+mass_year 
+food_year 
+drug_year 
+all_year 
+
+all = sum(all$weight_sum)
+
+```
+
+```{r warning=F}
+#author :Cai
+# Check for missing values
+sum(is.na(mass))
+sum(is.na(food))
+sum(is.na(drug))
+
+```
+
+#### Visualisation data
+
+```{r}
+#author :Cai
+year_plot <- ggplot(all_year)
+x = c(1:nrow(all_year))
+year_plot + geom_line(aes(x=x,y=all_year[,3]),color="red") +
+  geom_line(aes(x=x,y=mass_year[,3]),color="blue") +
+  geom_line(aes(x=x,y=food_year[,3]),color="green") +
+  geom_line(aes(x=x,y=drug_year[,3]),color="skyblue") +
+  scale_x_continuous(label = function(x){return(all_year[x,1])})
+mass
+```
+
+#get month data
+
+```{r}
+#author :Du
+mass_month <- data.frame(mass$Month,mass$VOLUMN,mass$PRICE,mass$weight_sum)
+mass_month
+food_month <- data.frame(food$Month,food$VOLUMN,food$PRICE,food$weight_sum)
+food_month
+drug_month <- data.frame(drug$Month,drug$VOLUMN,drug$PRICE,drug$weight_sum)
+drug_month
+```
+
+##### STL model
+
+```{r}
+#author :Du
+#mass
+#Generate time series objects
+ts_mass_month <- ts(mass_month$mass.weight_sum,start = c(2004,6),frequency = 12)
+fit_mass <- stl(ts_mass_month,s.window = 'period')
+plot(fit_mass)
+
+fit_mass %>% forecast(method="naive") %>% autoplot() + ylab("sales")+
+  theme(text = element_text(family = "STHeiti"))+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+#food
+#Generate time series objects
+ts_food_month <- ts(food_month$food.weight_sum,start = c(2004,6),frequency = 12)
+fit_food <- stl(ts_food_month,s.window = 'period')
+plot(fit_food)
+
+fit_food %>% forecast(method="naive") %>% autoplot() + ylab("sales")+
+  theme(text = element_text(family = "STHeiti"))+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+#drug
+#Generate time series objects
+ts_drug_month <- ts(drug_month$drug.weight_sum,start = c(2004,6),frequency = 12)
+fit_drug <- stl(ts_drug_month,s.window = 'period')
+plot(fit_drug)
+
+fit_drug %>% forecast(method="naive") %>% autoplot() + ylab("sales")+
+  theme(text = element_text(family = "STHeiti"))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+##### ETS model
+
+```{r}
+#author :Du
+#mass
+fit_mass %>% forecast(h=36) %>%
+  autoplot() +
+  xlab("time") +
+  ylab("sales")+
+  ggtitle('mass cake predict') +
+  theme(text = element_text(family = "STHeiti"))+
+  theme(plot.title = element_text(hjust = 0.5))
+
+#food
+fit_food %>% forecast(h=36) %>%
+  autoplot() +
+  xlab("time") +
+  ylab("sales")+
+  ggtitle('food cake predict') +
+  theme(text = element_text(family = "STHeiti"))+
+  theme(plot.title = element_text(hjust = 0.5))
+
+#drug
+fit_drug %>% forecast(h=36) %>%
+  autoplot() +
+  xlab("time") +
+  ylab("sales")+
+  ggtitle('drug cake predict') +
+  theme(text = element_text(family = "STHeiti"))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+#author :Liao
+data_mass_quarter=ts(mass_quarter$weight_sum,frequency=4,start=2004,end=2009)
+data=data_mass_quarter
+plot(data)
+ndiffs(data)
+ddata <- diff(data)
+plot(ddata)
+ADF<-adf.test(ddata)
+ADF
+```
+
+#####2.Model Sizing and Fitting
+
+```{r}
+# author: Liao
+fit <- auto.arima(data)
+fit
+accuracy(fit)
+```
+
+#####3.Model diagnosis
+
+```{r}
+# author: Liao
+qqnorm(fit$residuals)  #plot   
+qqline(fit$residuals)  #add line
+Box.test(fit$residuals, type="Ljung-Box")
+#Residual test, significant: residuals are not smooth p-value greater than 0.05 Not suitable
+```
+
+#### HW-model
+```{r}
+#author:Wang
+
+mass_month <- data.frame(mass$Month,mass$VOLUMN,mass$PRICE,mass$weight_sum)
+mass_month
+food_month <- data.frame(food$Month,food$VOLUMN,food$PRICE,food$weight_sum)
+food_month
+drug_month <- data.frame(drug$Month,drug$VOLUMN,drug$PRICE,drug$weight_sum)
+drug_month
+
+# Create monthly data time series
+ts_mass_month <- ts(mass_month$mass.weight_sum,start = c(2004,6),frequency = 12)
+
+# Draw a monthly data graph
+autoplot(ts_mass_month)
+
+# Forecasting monthly data using the Holt-Winters model
+fc <- hw(subset(ts_mass_month,end=length(ts_mass_month)-35),
+         damped = TRUE, seasonal="multiplicative", h=35)
+autoplot(ts_mass_month) +
+  autolayer(fc, series="HW multi damped", PI=FALSE)+
+  guides(colour=guide_legend(title="month forecasts"))
+
+# Comparison of Holt-Winters Addition and Multiplication Methods for Monthly Data
+aust <- window(ts_mass_month)
+fit1 <- hw(aust,seasonal="additive")
+fit2 <- hw(aust,seasonal="multiplicative")
+autoplot(aust) +
+  autolayer(fit1, series="HW additive forecasts", PI=FALSE) +
+  autolayer(fit2, series="HW multiplicative forecasts",
+            PI=FALSE) +
+  xlab("Year") +
+  ylab("mass_month)") +
+  ggtitle("Comparison of Holt-Winters' Addition and Multiplication Methods") +
+  guides(colour=guide_legend(title="Forecast"))
+
+# Create quarterly data time series
+ts_mass_quarter  <- ts(mass_quarter$weight_sum,frequency=4,start=2004,end=2009)
+
+# Draw quarterly data graphs
+autoplot(ts_mass_quarter)
+
+# Quarterly data forecast with Holt-Winters model
+fc <- hw(subset(ts_mass_quarter,end=length(ts_mass_quarter)-10),
+         damped = TRUE, seasonal="multiplicative", h=35)
+autoplot(ts_mass_quarter) +
+  autolayer(fc, series="HW multi damped", PI=FALSE)+
+  guides(colour=guide_legend(title="Daily forecasts"))
+
+# Comparison of Holt-Winters Additive and Multiplicative Methods for Quarterly Data
+aust <- window(ts_mass_quarter)
+fit1 <- hw(aust,seasonal="additive")
+fit2 <- hw(aust,seasonal="multiplicative")
+autoplot(aust) +
+  autolayer(fit1, series="HW additive forecasts", PI=FALSE) +
+  autolayer(fit2, series="HW multiplicative forecasts",
+            PI=FALSE) +
+  xlab("Year") +
+  ylab("mass_quarter)") +
+  ggtitle("Comparison of Holt-Winters' Addition and Multiplication Methods") +
+  guides(colour=guide_legend(title="Forecast"))
+
+```
+####HW-MODEL
+
+```{r}
+# author：wang
+### Food data
+
+# Create monthly data time series
+ts_food_month <- ts(food_month$food.weight_sum,start = c(2004,6),frequency = 12)
+
+# Draw a monthly data graph
+autoplot(ts_food_month)
+
+# Forecasting monthly data using the Holt-Winters model
+fc <- hw(subset(ts_food_month,end=length(ts_food_month)-35),
+         damped = TRUE, seasonal="multiplicative", h=35)
+autoplot(ts_food_month) +
+  autolayer(fc, series="HW multi damped", PI=FALSE)+
+  guides(colour=guide_legend(title="month forecasts"))
+
+# Comparison of Holt-Winters Addition and Multiplication Methods for Monthly Data
+aust <- window(ts_food_month)
+fit1 <- hw(aust,seasonal="additive")
+fit2 <- hw(aust,seasonal="multiplicative")
+autoplot(aust) +
+  autolayer(fit1, series="HW additive forecasts", PI=FALSE) +
+  autolayer(fit2, series="HW multiplicative forecasts",
+            PI=FALSE) +
+  xlab("Year") +
+  ylab("food_month)") +
+  ggtitle("Comparison of Holt-Winters' Addition and Multiplication Methods") +
+  guides(colour=guide_legend(title="Forecast"))
+
+# Create quarterly data time series
+ts_food_quarter  <- ts(food_quarter$weight_sum,frequency=4,start=2004,end=2009)
+
+# Draw quarterly data graphs
+autoplot(ts_food_quarter)
+
+# Quarterly data forecast with Holt-Winters model
+fc <- hw(subset(ts_food_quarter,end=length(ts_food_quarter)-10),
+         damped = TRUE, seasonal="multiplicative", h=35)
+autoplot(ts_food_quarter) +
+  autolayer(fc, series="HW multi damped", PI=FALSE)+
+  guides(colour=guide_legend(title="Daily forecasts"))
+
+# Comparison of Holt-Winters Additive and Multiplicative Methods for Quarterly Data
+aust <- window(ts_food_quarter)
+fit1 <- hw(aust,seasonal="additive")
+fit2 <- hw(aust,seasonal="multiplicative")
+autoplot(aust) +
+  autolayer(fit1, series="HW additive forecasts", PI=FALSE) +
+  autolayer(fit2, series="HW multiplicative forecasts",
+            PI=FALSE) +
+  xlab("Year") +
+  ylab("food_quarter)") +
+  ggtitle("Comparison of Holt-Winters' Addition and Multiplication Methods") +
+  guides(colour=guide_legend(title="Forecast"))
+
+```
+
+####HW-MODEL
+```{r}
+# author：wang
+### Drug data
+
+# Create monthly data time series
+ts_drug_month <- ts(drug_month$drug.weight_sum,start = c(2004,6),frequency = 12)
+
+# Draw a monthly data graph
+autoplot(ts_drug_month)
+
+# Forecasting monthly data using the Holt-Winters model
+fc <- hw(subset(ts_drug_month,end=length(ts_drug_month)-35),
+         damped = TRUE, seasonal="multiplicative", h=35)
+autoplot(ts_drug_month) +
+  autolayer(fc, series="HW multi damped", PI=FALSE)+
+  guides(colour=guide_legend(title="month forecasts"))
+
+# Comparison of Holt-Winters Addition and Multiplication Methods for Monthly Data
+aust <- window(ts_drug_month)
+fit1 <- hw(aust,seasonal="additive")
+fit2 <- hw(aust,seasonal="multiplicative")
+autoplot(aust) +
+  autolayer(fit1, series="HW additive forecasts", PI=FALSE) +
+  autolayer(fit2, series="HW multiplicative forecasts",
+            PI=FALSE) +
+  xlab("Year") +
+  ylab("drug_month)") +
+  ggtitle("Comparison of Holt-Winters' Addition and Multiplication Methods") +
+  guides(colour=guide_legend(title="Forecast"))
+
+# Create quarterly data time series
+ts_drug_quarter  <- ts(drug_quarter$weight_sum,frequency=4,start=2004,end=2009)
+
+# Draw quarterly data graphs
+autoplot(ts_drug_quarter)
+
+# Quarterly data forecast with Holt-Winters model
+fc <- hw(subset(ts_drug_quarter,end=length(ts_drug_quarter)-10),
+         damped = TRUE, seasonal="multiplicative", h=35)
+autoplot(ts_drug_quarter) +
+  autolayer(fc, series="HW multi damped", PI=FALSE)+
+  guides(colour=guide_legend(title="Daily forecasts"))
+
+# Comparison of Holt-Winters Additive and Multiplicative Methods for Quarterly Data
+aust <- window(ts_drug_quarter)
+fit1 <- hw(aust,seasonal="additive")
+fit2 <- hw(aust,seasonal="multiplicative")
+autoplot(aust) +
+  autolayer(fit1, series="HW additive forecasts", PI=FALSE) +
+  autolayer(fit2, series="HW multiplicative forecasts",
+            PI=FALSE) +
+  xlab("Year") +
+  ylab("drug_quarter)") +
+  ggtitle("Comparison of Holt-Winters' Addition and Multiplication Methods") +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+
+
+#### time regression
+
+```{r}
+# author: Ding
+# Fill in the missing months
+mass_2004 <- filter(mass, substring(mass$Month, 1, 4) == 2004)
+mass_2009 <- filter(mass, substring(mass$Month, 1, 4) == 2009)
+food_2004 <- filter(food, substring(food$Month, 1, 4) == 2004)
+food_2009 <- filter(food, substring(food$Month, 1, 4) == 2009)
+drug_2004 <- filter(drug, substring(drug$Month, 1, 4) == 2004)
+drug_2009 <- filter(drug, substring(drug$Month, 1, 4) == 2009)
+
+exp04m <- sum(mass_2004$weight_sum)/6
+exp04m
+
+exp09m <- sum(mass_2009$weight_sum)/6
+exp09m
+
+exp04f <- sum(food_2004$weight_sum)/6
+exp04f
+
+exp09f <- sum(food_2009$weight_sum)/6
+exp09f
+
+exp04d <- sum(drug_2004$weight_sum)/6
+exp04d
+
+exp09d <- sum(drug_2009$weight_sum)/6
+exp09d
+
+mass_year[1,3]<-mass_year[1,3] + exp04m*6
+mass_year[6,3]<-mass_year[6,3] + exp09m*6
+
+
+train_mass <- mass_year
+  
+
+library(tsibble)
+data_df_year_ts<-train_mass%>%
+  mutate(data = as.integer(year)) %>%
+  as_tsibble(index =data )
+
+fit_trends <- data_df_year_ts %>%
+  model(
+    linear = TSLM(weight_sumy  ~ trend()),
+  )
+fc_trends <- fit_trends %>% forecast(h = 3)
+
+data_df_year_ts %>%
+  autoplot(weight_sumy ) +
+  geom_line(data = fitted(fit_trends),
+            aes(y = .fitted, x= data, colour = .model)) +
+  autolayer(fc_trends, alpha = 0.5, level = 95) +
+  labs(y = "weight_sum",
+       title = "change mass_year   of 3 year")
+
+
+# food_year
+
+
+food_year[1,3]<-food_year[1,3] + exp04f*6
+food_year[6,3]<-food_year[6,3] + exp09f*6
+
+
+train_mass2 <- food_year
+
+
+library(tsibble)
+data_df_year_ts2<-train_mass2%>%
+  mutate(data = as.integer(year)) %>%
+  as_tsibble(index =data )
+
+fit_trends2 <- data_df_year_ts2 %>%
+  model(
+    linear = TSLM(weight_sumy   ~ trend()),
+  )
+fc_trends2 <- fit_trends2 %>% forecast(h = 3)
+data_df_year_ts2 %>%
+  autoplot(weight_sumy  ) +
+  geom_line(data = fitted(fit_trends2),
+            aes(y = .fitted,x= data, colour = .model)) +
+  autolayer(fc_trends2, alpha = 0.5, level = 95) +
+  labs(y = "weight_sum",
+       title = "change food_year of 3 year")
+
+
+
+
+#drug_year 
+
+drug_year[1,3]<-drug_year[1,3] + exp04d*6
+drug_year[6,3]<-drug_year[6,3] + exp09d*6
+
+train_mass3 <- drug_year
+
+
+library(tsibble)
+data_df_year_ts3<-train_mass3%>%
+  mutate(data = as.integer(year)) %>%
+  as_tsibble(index =data )
+
+fit_trends3 <- data_df_year_ts3 %>%
+  model(
+    linear = TSLM(weight_sumy   ~ trend()),
+  )
+fc_trends3 <- fit_trends3 %>% forecast(h = 3)
+data_df_year_ts3 %>%
+  autoplot(weight_sumy  ) +
+  geom_line(data = fitted(fit_trends3),
+            aes(y = .fitted,x= data, colour = .model)) +
+  autolayer(fc_trends3, alpha = 0.5, level = 95) +
+  labs(y = "weight_sum",
+       title = "change drug_year of 3 year")
+
+
+```
+
+
+#### other model set
+##### Traditional models combined with machine learning.
+##### modelset:auto_arima_xgboost，randomForest,earth，prophet_xgboost,stlm_ets,stlm_arima,prophet.
+
+```{r}
+Sys.setlocale('LC_TIME', 'C')
+month <- mass$Month
+month <- str_c('1_',month)
+month <- as.Date(month,format='%d_%Y_%b')
+
+mass
+
+mass$ds <- month
+mass$y  <-mass$weight_sum
+
+
+
+p_mass <-data.frame(mass['ds'],mass['y'])
+colnames(mass) <- c('ds','y','PRICE','weight_sum','date','sum')
+```
+
+```{r}
+# author Cai.
+
+# mass forecast 
+r_mass <-data.frame(p_mass['ds'],p_mass['y'])
+# Data visualisation
+r_mass %>%
+  plot_time_series(ds,y)
+# Split Data 80/20
+splits <- initial_time_split(r_mass, prop = 0.9)
+
+recipe_spec <- recipe(y ~ ds, training(splits)) %>%
+  step_timeseries_signature(ds) %>%
+  # step_fourier(date, period = 365, K = 5) %>%
+  step_dummy(all_nominal())
+
+recipe_spec %>% prep() %>% juice()
+# arima_boost
+
+model_fit_arima_boosted <- arima_boost(
+  min_n = 2,
+  learn_rate = 0.0000015
+) %>%
+  set_engine(engine = "auto_arima_xgboost") %>%
+  fit(y ~ ds + as.numeric(ds) + factor(month(ds, label = TRUE), ordered = F),
+      data = training(splits))
+
+# random forest
+model_spec_rf <- rand_forest(trees = 1000, min_n = 50) %>%
+  set_engine("randomForest")
+
+workflow_fit_rf <- workflow() %>%
+  add_model(model_spec_rf) %>%
+  add_recipe(recipe_spec %>% step_rm(ds)) %>%
+  fit(training(splits))
+# mars
+model_spec_mars <- mars(mode = "regression") %>%
+  set_engine("earth") 
+
+recipe_spec <- recipe(y ~ ds, data = training(splits)) %>%
+  step_date(ds, features = "month", ordinal = FALSE) %>%
+  step_mutate(ds_num = as.numeric(ds)) %>%
+  step_normalize(ds_num) %>%
+  step_rm(ds)
+
+wflw_fit_mars <- workflow() %>%
+  add_recipe(recipe_spec) %>%
+  add_model(model_spec_mars) %>%
+  fit(training(splits))
+
+# Model Spec
+model_spec <- prophet_boost(
+  learn_rate = 0.1
+) %>%
+  set_engine("prophet_xgboost")
+
+# Fit Spec
+if (TRUE) {
+  model_fit <- model_spec %>%
+    fit(log(y) ~ ds + as.numeric(ds) + month(ds, label = TRUE),
+        data = training(splits))
+  model_fit
+}
+
+# Model Spec
+model_spec <- seasonal_reg() %>%
+  set_engine("stlm_ets")
+
+# Fit Spec
+model_fit_ses <- model_spec %>%
+  fit(log(y) ~ ds, data = training(splits))
+
+model_spec <- seasonal_reg() %>%
+  set_engine("stlm_arima")
+
+# Fit Spec
+model_fit_sta <- model_spec %>%
+  fit(log(y) ~ ds, data = training(splits))
+#> frequency = 48 observations per 1 day
+model_fit
+
+model_spec <- prophet_reg() %>%
+  set_engine("prophet")
+
+# Fit Spec
+model_fit_p <- model_spec %>%
+  fit(log(y) ~ ds, data = training(splits))
+
+
+
+models_tbl <- modeltime_table(
+  model_fit_arima_boosted,
+  wflw_fit_mars,
+  workflow_fit_rf,
+  model_fit,
+  model_fit_ses,
+  model_fit_sta,
+  model_fit_p)
+
+models_tbl
+
+calibration_table <- models_tbl %>%
+  modeltime_calibrate(testing(splits))
+
+calibration_table %>%
+  modeltime_accuracy() %>%
+  table_modeltime_accuracy(.interactive = FALSE)
+
+calibration_table %>%
+  modeltime_forecast(actual_data = r_mass) %>%
+  plot_modeltime_forecast(.interactive = TRUE)
+
+refit_tbl <- calibration_table %>%
+  modeltime_refit(data = r_mass)
+
+# forecast 36 months
+#(Removing the first 3 models from the display shows a more detailed prediction with less error)
+refit_tbl %>%
+  modeltime_forecast(h = "36 months", actual_data = r_mass) %>%
+  filter(.model_desc != 'ACTUAL') %>%
+  plot_modeltime_forecast(
+    .legend_max_width = 25, # For mobile screens
+    .interactive      = TRUE
+  )
+```
+
+```{r}
+# author：Cai
+# food predict
+food$ds <- month
+food$y  <-food$weight_sum
+
+
+
+r_food <-data.frame(food['ds'],food['y'])
+
+# Data visualisation
+r_food %>%
+  plot_time_series(ds,y)
+
+# Split Data 80/20
+splits <- initial_time_split(r_food, prop = 0.9)
+
+recipe_spec <- recipe(y ~ ds, training(splits)) %>%
+  step_timeseries_signature(ds) %>%
+  step_fourier(ds, period = 91.25, K = 1) %>%
+  step_dummy(all_nominal())
+
+recipe_spec %>% prep() %>% juice()
+# arima_boost
+
+model_fit_arima_boosted <- arima_boost(
+  min_n = 2,
+  learn_rate = 0.000015
+) %>%
+  set_engine(engine = "auto_arima_xgboost") %>%
+  fit(y ~ ds + as.numeric(ds) + factor(month(ds, label = TRUE), ordered = F),
+      data = training(splits))
+
+# random forest
+model_spec_rf <- rand_forest(trees = 1000, min_n = 50) %>%
+  set_engine("randomForest")
+
+workflow_fit_rf <- workflow() %>%
+  add_model(model_spec_rf) %>%
+  add_recipe(recipe_spec %>% step_rm(ds)) %>%
+  fit(training(splits))
+# mars
+model_spec_mars <- mars(mode = "regression") %>%
+  set_engine("earth") 
+
+recipe_spec <- recipe(y ~ ds, data = training(splits)) %>%
+  step_date(ds, features = "month", ordinal = FALSE) %>%
+  step_mutate(ds_num = as.numeric(ds)) %>%
+  step_normalize(ds_num) %>%
+  step_rm(ds)
+
+wflw_fit_mars <- workflow() %>%
+  add_recipe(recipe_spec) %>%
+  add_model(model_spec_mars) %>%
+  fit(training(splits))
+
+# Model Spec
+model_fit_pro_boost <- prophet_boost(
+  learn_rate = 0.1
+) %>%
+  set_engine("prophet_xgboost")
+
+# Fit Spec
+if (TRUE) {
+  model_fit <- model_fit_pro_boost %>%
+    fit(log(y) ~ ds + as.numeric(ds) + month(ds, label = TRUE),
+        data = training(splits))
+  model_fit
+}
+
+
+# Model Spec
+model_spec <- seasonal_reg() %>%
+  set_engine("stlm_ets")
+
+# Fit Spec
+model_fit_ses <- model_spec %>%
+  fit(log(y) ~ ds, data = training(splits))
+
+model_spec <- seasonal_reg() %>%
+  set_engine("stlm_arima")
+
+# Fit Spec
+model_fit_sta <- model_spec %>%
+  fit(log(y) ~ ds, data = training(splits))
+#> frequency = 48 observations per 1 day
+
+model_spec <- prophet_reg() %>%
+  set_engine("prophet")
+
+# Fit Spec
+model_fit_p <- model_spec %>%
+  fit(log(y) ~ ds, data = training(splits))
+
+models_tbl <- modeltime_table(
+  model_fit_arima_boosted,
+  wflw_fit_mars,
+  workflow_fit_rf,
+  model_fit,
+  model_fit_ses,
+  model_fit_sta,
+  model_fit_p
+)
+
+models_tbl
+
+calibration_table <- models_tbl %>%
+  modeltime_calibrate(testing(splits))
+
+calibration_table %>%
+  modeltime_accuracy() %>%
+  table_modeltime_accuracy(.interactive = TRUE)
+
+calibration_table %>%
+  modeltime_forecast(actual_data = r_food) %>%
+  plot_modeltime_forecast(.interactive = TRUE)
+
+refit_tbl <- calibration_table %>%
+  modeltime_refit(data = r_food)
+
+#(Removing the first 3 models from the display shows a more detailed prediction with less error)
+refit_tbl %>%
+  modeltime_forecast(h = "36 months", actual_data = r_food) %>%
+  filter(.model_desc != 'ACTUAL') %>%
+  plot_modeltime_forecast(
+    .legend_max_width = 25, # For mobile screens
+    .interactive      = TRUE
+  )
+
+
+```
+
+```{r}
+# author：Cai
+# drug predict
+drug$ds <- month
+drug$y  <-drug$weight_sum
+
+
+
+r_drug <-data.frame(drug['ds'],drug['y'])
+
+# Data visualisation
+r_drug %>%
+  plot_time_series(ds,y)
+
+# Split Data 80/20
+splits <- initial_time_split(r_drug, prop = 0.9)
+
+recipe_spec <- recipe(y ~ ds, training(splits)) %>%
+  step_timeseries_signature(ds) %>%
+  step_fourier(ds, period = 365, K = 8) %>%
+  step_dummy(all_nominal())
+
+recipe_spec %>% prep() %>% juice()
+# arima_boost
+
+model_fit_arima_boosted <- arima_boost(
+  min_n = 2,
+  learn_rate = 0.00015
+) %>%
+  set_engine(engine = "auto_arima_xgboost") %>%
+  fit(y ~ ds + as.numeric(ds) + factor(month(ds, label = TRUE), ordered = F),
+      data = training(splits))
+
+# random forest
+model_spec_rf <- rand_forest(trees = 1000, min_n = 50) %>%
+  set_engine("randomForest")
+
+workflow_fit_rf <- workflow() %>%
+  add_model(model_spec_rf) %>%
+  add_recipe(recipe_spec %>% step_rm(ds)) %>%
+  fit(training(splits))
+# mars
+model_spec_mars <- mars(mode = "regression") %>%
+  set_engine("earth") 
+
+recipe_spec <- recipe(y ~ ds, data = training(splits)) %>%
+  step_date(ds, features = "month", ordinal = FALSE) %>%
+  step_mutate(ds_num = as.numeric(ds)) %>%
+  step_normalize(ds_num) %>%
+  step_rm(ds)
+
+wflw_fit_mars <- workflow() %>%
+  add_recipe(recipe_spec) %>%
+  add_model(model_spec_mars) %>%
+  fit(training(splits))
+
+# Model Spec
+model_fit_pro_boost <- prophet_boost(
+  learn_rate = 0.1
+) %>%
+  set_engine("prophet_xgboost")
+
+# Fit Spec
+if (TRUE) {
+  model_fit <- model_fit_pro_boost %>%
+    fit(log(y) ~ ds + as.numeric(ds) + month(ds, label = TRUE),
+        data = training(splits))
+  model_fit
+}
+
+# Fit Spec
+model_fit_ses <- model_spec %>%
+  fit(log(y) ~ ds, data = training(splits))
+
+model_spec <- seasonal_reg() %>%
+  set_engine("stlm_arima")
+
+# Fit Spec
+model_fit_sta <- model_spec %>%
+  fit(log(y) ~ ds, data = training(splits))
+#> frequency = 48 observations per 1 day
+
+model_spec <- prophet_reg() %>%
+  set_engine("prophet")
+
+# Fit Spec
+model_fit_p <- model_spec %>%
+  fit(log(y) ~ ds, data = training(splits))
+
+models_tbl <- modeltime_table(
+  model_fit_arima_boosted,
+  wflw_fit_mars,
+  workflow_fit_rf,
+  model_fit,
+  model_fit_ses,
+  model_fit_sta,
+  model_fit_p
+)
+
+models_tbl
+
+calibration_table <- models_tbl %>%
+  modeltime_calibrate(testing(splits))
+
+calibration_table %>%
+  modeltime_accuracy() %>%
+  table_modeltime_accuracy(.interactive = TRUE)
+
+calibration_table %>%
+  modeltime_forecast(actual_data = r_drug) %>%
+  plot_modeltime_forecast(.interactive = TRUE)
+
+refit_tbl <- calibration_table %>%
+  modeltime_refit(data = r_drug)
+
+
+#(Removing the first 3 models from the display shows a more detailed prediction with less error)
+refit_tbl %>%
+  modeltime_forecast(h = "36 months", actual_data = r_drug) %>%
+  filter(.model_desc != 'ACTUAL') %>%
+  plot_modeltime_forecast(
+    .legend_max_width = 25, # For mobile screens
+    .interactive      = TRUE
+
+  )
+```
+
+## results
+  On the traditional model：
+  
+  Residual test, significant: residuals are not smooth p-value greater than 0.05 ,so the data are not suitable to use arima model.
+  
+  In particular, we used time regression to predict trends in the annual data. It is clear that the three levels of supermarket sales show an upward trend.
+  
+  The Holt-Winters seasonality approach consists of a forecasting equation and three smoothing equations and it is clear that the model has identified monthly and quarterly seasonal patterns and growth trends at the end of the data and that the forecasts match the test data.However, HW did not have the same fit results for the two seasonal models on some data.
+
+  For each month's forecast, we used the STL and ETS models to forecast the seasonal follow, trends. It is clear to see that there is an upward trend for the next three years of the cycle.
+  
+  On the integrated model：auto_arima_xgboost，randomForest,earth，prophet_xgboost,stlm_ets,stlm_arima,prophet.（modeltime combines time series data well with machine learning models.
+）
+
+  prophet has the advantage of being able to calculate the variation points of the first 80 percent of the historical data, from which future cycles can be predicted, and also has the benefit of calculating trends,The algorithm will automatically calculate the change points. And XGBoost has the good effect of training residuals. However, the rmse of arima is particularly large because this data is not applicable to the arima model, but the residuals of xgboost training prophet converge with good results.
+  
+  RANDOMFOREST has the advantage of dealing with non-linear regression problems, but here it seems that rmse does not converge.
+  
+  EARTH is a segmented regression.Again, the results do not apply here.
+  
+  The good performers are prophet_xgboost,stlm_ets,stlm_arima,prophet. stlm_ets,stlm_arima are seasonal models and the difference between prophet_xgboost and prophet is that prophet_xgboost is trained with xgboost to train the residuals.
+  **Because the model is logistic and easy to calculate, the predicted values are small, but the trend and season can be predicted more accurately. If you remove the first three model lines, you can see the details of the other four models.**
+  
+  The XGBoost component has specified parameters. We can get better accuracy by tuning, but as the prophet component works well on this data, the additional improvement is likely to be low.
+  
+   *As there are only months and years in modeltime, there are no forecast quarters on the novel model.*
+   
+   *The models all capture the uptrend. However, the novel model is more accurate and detailed than the time regression model.*
+   
+## Conclusions
+
+  **Different models should be used to fulfil different forecasting needs on different data intervals (or different amounts of data, less so for quarters versus years).**
+  
+  **For example, we use time regression and machine learning algorithms to forecast yearly trends, but the machine learning algorithms are different from the traditional algorithm framework, for example, in the modeltime package, the imported data scale is by month, so for 04 and 09 missing half-year data, it is more flexible for forecasting yearly trends. For example, it will help us calculate the trend to 06 December, instead of predicting the trend from 2010 to December 2012, the data processing interval is more flexible.**
+  
+  
+  **Exponential smoothing and hw have excellent performance in seasonal forecasting. But by combining traditional models with machine learning algorithms, the results will be even better. Among the novel models for dealing with time series problems, there are not only machine learning models, but more commonly deep learning models, most of which are related to deep learning during the literature search. However, due to the limited preparation time given for the exam, it takes more than a month to train deep learning, so instead of choosing a deep learning model for this novel model, we chose, instead, the faster training machine We did not choose a deep learning model this time, but a faster training machine learning model. Although there were some limitations, we were able to complete all the tasks.**
+
+  
+  
